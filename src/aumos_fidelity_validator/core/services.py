@@ -21,12 +21,20 @@ from aumos_fidelity_validator.adapters.repositories import (
     ValidationJobRepository,
 )
 from aumos_fidelity_validator.core.interfaces import (
+    AudioMetricsProtocol,
     CertificateGeneratorProtocol,
     FidelityEvaluatorProtocol,
+    FidelityReportGeneratorProtocol,
+    HealthcareMetricsProtocol,
+    ImageMetricsProtocol,
     MemorizationAttackProtocol,
     PrivacyRiskEvaluatorProtocol,
     QualityContractProtocol,
+    StatisticalTestRunnerProtocol,
     StorageProtocol,
+    TabularMetricsProtocol,
+    TextMetricsProtocol,
+    VideoMetricsProtocol,
 )
 from aumos_fidelity_validator.core.models import (
     JobStatus,
@@ -856,3 +864,466 @@ class FullValidationService:
             passed=passed,
         )
         return job
+
+
+class TabularMetricsService:
+    """Orchestrates detailed tabular column-level fidelity evaluation.
+
+    Wraps the TabularMetricsProtocol adapter and provides a clean service
+    interface for running column-level distribution comparisons including
+    Wasserstein distance, KL divergence, and 1-Way Distribution.
+    """
+
+    def __init__(
+        self,
+        evaluator: TabularMetricsProtocol,
+        storage: StorageProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected tabular metrics evaluator.
+
+        Args:
+            evaluator: TabularMetricsProtocol implementation.
+            storage: Storage adapter for loading datasets.
+            settings: Service configuration settings.
+        """
+        self._evaluator = evaluator
+        self._storage = storage
+        self._settings = settings
+
+    async def evaluate_datasets(
+        self,
+        real_dataset_uri: str,
+        synthetic_dataset_uri: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Load datasets from storage and run tabular fidelity evaluation.
+
+        Args:
+            real_dataset_uri: MinIO URI for the real dataset.
+            synthetic_dataset_uri: MinIO URI for the synthetic dataset.
+            metadata: Optional column metadata with sdtype hints.
+
+        Returns:
+            Tabular fidelity report with overall_score and column_metrics.
+        """
+        logger.info(
+            "Loading datasets for tabular metrics evaluation",
+            real_uri=real_dataset_uri,
+            synthetic_uri=synthetic_dataset_uri,
+        )
+        real_data = await self._storage.load_dataset(real_dataset_uri)
+        synthetic_data = await self._storage.load_dataset(synthetic_dataset_uri)
+
+        if len(real_data) > self._settings.max_sample_rows:
+            real_data = real_data.sample(n=self._settings.max_sample_rows, random_state=42)
+        if len(synthetic_data) > self._settings.max_sample_rows:
+            synthetic_data = synthetic_data.sample(n=self._settings.max_sample_rows, random_state=42)
+
+        report = await self._evaluator.evaluate(
+            real_data=real_data,
+            synthetic_data=synthetic_data,
+            metadata=metadata,
+        )
+        logger.info(
+            "Tabular metrics evaluation completed",
+            overall_score=report.get("overall_score"),
+            columns_evaluated=report.get("total_columns"),
+        )
+        return report
+
+
+class TextMetricsService:
+    """Orchestrates text generation quality metric evaluation.
+
+    Provides BLEU, ROUGE, semantic similarity, coherence, and perplexity
+    scoring for text-based synthetic datasets.
+    """
+
+    def __init__(
+        self,
+        evaluator: TextMetricsProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected text metrics evaluator.
+
+        Args:
+            evaluator: TextMetricsProtocol implementation.
+            settings: Service configuration settings.
+        """
+        self._evaluator = evaluator
+        self._settings = settings
+
+    async def evaluate_texts(
+        self,
+        real_texts: list[str],
+        synthetic_texts: list[str],
+        model_name: str = "all-MiniLM-L6-v2",
+    ) -> dict[str, Any]:
+        """Run text quality evaluation on real and synthetic text corpora.
+
+        Args:
+            real_texts: Reference text samples.
+            synthetic_texts: Generated text samples.
+            model_name: Sentence-transformer model for semantic similarity.
+
+        Returns:
+            Text quality report with bleu, rouge, semantic_similarity,
+            coherence, perplexity, and overall_score.
+        """
+        logger.info(
+            "Starting text metrics evaluation",
+            real_count=len(real_texts),
+            synthetic_count=len(synthetic_texts),
+        )
+        report = await self._evaluator.evaluate(
+            real_texts=real_texts,
+            synthetic_texts=synthetic_texts,
+            model_name=model_name,
+        )
+        logger.info(
+            "Text metrics evaluation completed",
+            overall_score=report.get("overall_score"),
+        )
+        return report
+
+
+class MediaMetricsService:
+    """Orchestrates image, audio, and video quality metric evaluation.
+
+    Provides a unified interface for evaluating the fidelity of generated
+    media (images, audio, video) against reference samples.
+    """
+
+    def __init__(
+        self,
+        image_evaluator: ImageMetricsProtocol,
+        audio_evaluator: AudioMetricsProtocol,
+        video_evaluator: VideoMetricsProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected media metric evaluators.
+
+        Args:
+            image_evaluator: ImageMetricsProtocol implementation.
+            audio_evaluator: AudioMetricsProtocol implementation.
+            video_evaluator: VideoMetricsProtocol implementation.
+            settings: Service configuration settings.
+        """
+        self._image = image_evaluator
+        self._audio = audio_evaluator
+        self._video = video_evaluator
+        self._settings = settings
+
+    async def evaluate_images(
+        self,
+        real_images: "Any",
+        synthetic_images: "Any",
+    ) -> dict[str, Any]:
+        """Run image fidelity evaluation (FID, IS, LPIPS, SSIM).
+
+        Args:
+            real_images: Real image batch, shape (N, H, W, C), uint8.
+            synthetic_images: Synthetic image batch, same format.
+
+        Returns:
+            Image quality report with fid_score, is_score, lpips_score,
+            ssim_score, and overall_score.
+        """
+        import numpy as np
+
+        logger.info("Starting image metrics evaluation")
+        report = await self._image.evaluate(
+            real_images=np.asarray(real_images),
+            synthetic_images=np.asarray(synthetic_images),
+        )
+        logger.info("Image metrics evaluation completed", overall_score=report.get("overall_score"))
+        return report
+
+    async def evaluate_audio(
+        self,
+        real_audio_batch: list[Any],
+        synthetic_audio_batch: list[Any],
+        sample_rate: int = 16_000,
+    ) -> dict[str, Any]:
+        """Run audio fidelity evaluation (MOS, speaker similarity, pitch, SNR).
+
+        Args:
+            real_audio_batch: Real audio waveforms (float32 numpy arrays).
+            synthetic_audio_batch: Synthetic audio waveforms.
+            sample_rate: Audio sample rate in Hz.
+
+        Returns:
+            Audio quality report with mos_score, speaker_similarity,
+            pitch_score, prosody_score, snr_score, and overall_score.
+        """
+        import numpy as np
+
+        logger.info("Starting audio metrics evaluation", sample_rate=sample_rate)
+        report = await self._audio.evaluate(
+            real_audio_batch=[np.asarray(w) for w in real_audio_batch],
+            synthetic_audio_batch=[np.asarray(w) for w in synthetic_audio_batch],
+            sample_rate=sample_rate,
+        )
+        logger.info("Audio metrics evaluation completed", overall_score=report.get("overall_score"))
+        return report
+
+    async def evaluate_video(
+        self,
+        real_video: "Any",
+        synthetic_video: "Any",
+    ) -> dict[str, Any]:
+        """Run video fidelity evaluation (LPIPS, optical flow, temporal coherence).
+
+        Args:
+            real_video: Real video frames, shape (T, H, W, C), uint8.
+            synthetic_video: Synthetic video frames, same format.
+
+        Returns:
+            Video quality report with per-frame lpips, optical flow
+            consistency, temporal coherence, and overall_score.
+        """
+        import numpy as np
+
+        logger.info("Starting video metrics evaluation")
+        report = await self._video.evaluate(
+            real_video=np.asarray(real_video),
+            synthetic_video=np.asarray(synthetic_video),
+        )
+        logger.info("Video metrics evaluation completed", overall_score=report.get("overall_score"))
+        return report
+
+
+class HealthcareMetricsService:
+    """Orchestrates healthcare-specific data fidelity evaluation.
+
+    Validates FHIR bundles, clinical realism, code alignment, lab value
+    plausibility, and medication safety for synthetic healthcare datasets.
+    """
+
+    def __init__(
+        self,
+        evaluator: HealthcareMetricsProtocol,
+        storage: StorageProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected healthcare metrics evaluator.
+
+        Args:
+            evaluator: HealthcareMetricsProtocol implementation.
+            storage: Storage adapter for loading datasets.
+            settings: Service configuration settings.
+        """
+        self._evaluator = evaluator
+        self._storage = storage
+        self._settings = settings
+
+    async def evaluate_healthcare_dataset(
+        self,
+        real_dataset_uri: str,
+        synthetic_dataset_uri: str,
+        fhir_bundles: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Load and evaluate healthcare dataset fidelity.
+
+        Args:
+            real_dataset_uri: MinIO URI for the real healthcare dataset.
+            synthetic_dataset_uri: MinIO URI for the synthetic dataset.
+            fhir_bundles: Optional FHIR bundles for structural validation.
+            metadata: Optional column-to-clinical-type metadata mapping.
+
+        Returns:
+            Healthcare fidelity report with fhir_validation, clinical_realism,
+            code_alignment, lab_plausibility, medication_safety, overall_score.
+        """
+        logger.info(
+            "Loading healthcare datasets for evaluation",
+            real_uri=real_dataset_uri,
+            synthetic_uri=synthetic_dataset_uri,
+        )
+        real_data = await self._storage.load_dataset(real_dataset_uri)
+        synthetic_data = await self._storage.load_dataset(synthetic_dataset_uri)
+
+        report = await self._evaluator.evaluate(
+            real_data=real_data,
+            synthetic_data=synthetic_data,
+            fhir_bundles=fhir_bundles,
+            metadata=metadata,
+        )
+        logger.info(
+            "Healthcare metrics evaluation completed",
+            overall_score=report.get("overall_score"),
+        )
+        return report
+
+
+class StatisticalTestService:
+    """Orchestrates multi-test statistical distribution comparison.
+
+    Runs KS, chi-squared, Wasserstein, Anderson-Darling, and
+    Jensen-Shannon tests with Bonferroni correction across all columns.
+    """
+
+    def __init__(
+        self,
+        test_runner: StatisticalTestRunnerProtocol,
+        storage: StorageProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected statistical test runner.
+
+        Args:
+            test_runner: StatisticalTestRunnerProtocol implementation.
+            storage: Storage adapter for loading datasets.
+            settings: Service configuration settings.
+        """
+        self._test_runner = test_runner
+        self._storage = storage
+        self._settings = settings
+
+    async def run_tests_on_datasets(
+        self,
+        real_dataset_uri: str,
+        synthetic_dataset_uri: str,
+        alpha: float = 0.05,
+        thresholds: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Load datasets and run the full statistical test suite.
+
+        Args:
+            real_dataset_uri: MinIO URI for the real dataset.
+            synthetic_dataset_uri: MinIO URI for the synthetic dataset.
+            alpha: Significance level before Bonferroni correction.
+            thresholds: Per-metric distance thresholds for pass/fail.
+
+        Returns:
+            Statistical test report with per-column results, Bonferroni
+            correction details, and overall pass/fail verdict.
+        """
+        logger.info(
+            "Loading datasets for statistical testing",
+            real_uri=real_dataset_uri,
+            synthetic_uri=synthetic_dataset_uri,
+            alpha=alpha,
+        )
+        real_data = await self._storage.load_dataset(real_dataset_uri)
+        synthetic_data = await self._storage.load_dataset(synthetic_dataset_uri)
+
+        if len(real_data) > self._settings.max_sample_rows:
+            real_data = real_data.sample(n=self._settings.max_sample_rows, random_state=42)
+        if len(synthetic_data) > self._settings.max_sample_rows:
+            synthetic_data = synthetic_data.sample(n=self._settings.max_sample_rows, random_state=42)
+
+        report = await self._test_runner.run_all_tests(
+            real_data=real_data,
+            synthetic_data=synthetic_data,
+            alpha=alpha,
+            thresholds=thresholds,
+        )
+        logger.info(
+            "Statistical tests completed",
+            overall_passed=report.get("overall_passed"),
+            columns_tested=report.get("total_columns_tested"),
+            significantly_different=len(report.get("significantly_different_columns", [])),
+        )
+        return report
+
+
+class ReportService:
+    """Orchestrates fidelity report generation in JSON and PDF formats.
+
+    Produces structured JSON reports and PDF compliance reports from
+    the outputs of all evaluation services.
+    """
+
+    def __init__(
+        self,
+        session: "Any",
+        report_generator: FidelityReportGeneratorProtocol,
+        storage: StorageProtocol,
+        settings: Settings,
+    ) -> None:
+        """Initialise with injected report generator and storage.
+
+        Args:
+            session: SQLAlchemy async session.
+            report_generator: FidelityReportGeneratorProtocol implementation.
+            storage: Storage adapter for uploading reports.
+            settings: Service configuration settings.
+        """
+        self._session = session
+        self._generator = report_generator
+        self._storage = storage
+        self._settings = settings
+        self._job_repo = ValidationJobRepository(session)
+
+    async def generate_and_store_report(
+        self,
+        job_id: uuid.UUID,
+        tenant_id: str,
+    ) -> dict[str, Any]:
+        """Generate JSON and PDF reports for a completed validation job.
+
+        Loads the job's evaluation results, generates both report formats,
+        uploads the PDF to MinIO, and returns the full JSON report.
+
+        Args:
+            job_id: UUID of a completed ValidationJob.
+            tenant_id: Tenant identifier.
+
+        Returns:
+            Dict with json_report (full structured report) and pdf_uri (MinIO URI).
+
+        Raises:
+            NotFoundError: If no job with the given ID exists.
+            ValueError: If the job is not yet completed.
+        """
+        job = await self._job_repo.get_by_id(job_id)
+        if job is None:
+            raise NotFoundError(resource="ValidationJob", resource_id=str(job_id))
+
+        if job.status != JobStatus.COMPLETED:
+            raise ValueError(f"Job {job_id} is not completed (status={job.status})")
+
+        logger.info(
+            "Generating fidelity reports",
+            job_id=str(job_id),
+            tenant_id=tenant_id,
+        )
+
+        json_report = await self._generator.generate_json_report(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            fidelity_report=job.fidelity_report or {},
+            privacy_report=job.privacy_report,
+            memorization_report=job.memorization_report,
+            overall_score=float(job.overall_score or 0),
+            passed=job.passed or False,
+        )
+
+        pdf_bytes = await self._generator.generate_pdf_report(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            fidelity_report=job.fidelity_report or {},
+            privacy_report=job.privacy_report,
+            memorization_report=job.memorization_report,
+            overall_score=float(job.overall_score or 0),
+            passed=job.passed or False,
+        )
+
+        pdf_uri = await self._storage.upload_certificate(
+            tenant_id=tenant_id,
+            job_id=job_id,
+            pdf_bytes=pdf_bytes,
+        )
+
+        logger.info(
+            "Reports generated and stored",
+            job_id=str(job_id),
+            pdf_uri=pdf_uri,
+        )
+        return {
+            "json_report": json_report,
+            "pdf_uri": pdf_uri,
+        }

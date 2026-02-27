@@ -7,6 +7,7 @@ framework-independent and testable with mock implementations.
 import uuid
 from typing import Any, Protocol
 
+import numpy as np
 import pandas as pd
 
 
@@ -224,4 +225,269 @@ class StorageProtocol(Protocol):
         pdf_bytes: bytes,
     ) -> str:
         """Upload a PDF certificate to MinIO and return its URI."""
+        ...
+
+
+class TabularMetricsProtocol(Protocol):
+    """Evaluates detailed tabular data fidelity at the column level.
+
+    Computes 1-Way Distribution, Wasserstein distance, KL divergence,
+    column-level statistics comparison, and an aggregated fidelity score.
+    """
+
+    async def evaluate(
+        self,
+        real_data: pd.DataFrame,
+        synthetic_data: pd.DataFrame,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run detailed tabular column-level fidelity evaluation.
+
+        Args:
+            real_data: The original source dataset.
+            synthetic_data: The generated synthetic dataset.
+            metadata: Optional column metadata with sdtype hints.
+
+        Returns:
+            Report dict with overall_score, column_metrics (per-column
+            wasserstein_score, kl_divergence_score, statistics_score,
+            one_wd_score, column_score), and aggregate counts.
+        """
+        ...
+
+
+class TextMetricsProtocol(Protocol):
+    """Evaluates quality of generated text against reference corpora.
+
+    Computes BLEU (1-4 gram), ROUGE-1/2/L, semantic similarity,
+    text coherence, and perplexity estimation.
+    """
+
+    async def evaluate(
+        self,
+        real_texts: list[str],
+        synthetic_texts: list[str],
+        model_name: str = "all-MiniLM-L6-v2",
+    ) -> dict[str, Any]:
+        """Run all text quality metrics.
+
+        Args:
+            real_texts: Reference (ground-truth) text samples.
+            synthetic_texts: Generated text samples to evaluate.
+            model_name: Sentence-transformer model for semantic similarity.
+
+        Returns:
+            Report dict with bleu, rouge, semantic_similarity, coherence,
+            perplexity, and overall_score.
+        """
+        ...
+
+
+class ImageMetricsProtocol(Protocol):
+    """Evaluates image generation quality using distribution-level metrics.
+
+    Computes FID, IS, LPIPS, and SSIM, then aggregates into a single
+    image fidelity score.
+    """
+
+    async def evaluate(
+        self,
+        real_images: np.ndarray,
+        synthetic_images: np.ndarray,
+    ) -> dict[str, Any]:
+        """Run full image fidelity evaluation.
+
+        Args:
+            real_images: Real image batch, shape (N, H, W, C), uint8, RGB.
+            synthetic_images: Synthetic image batch, same format.
+
+        Returns:
+            Report dict with fid_score, inception_score, lpips_score,
+            ssim_score, and overall_score.
+        """
+        ...
+
+
+class AudioMetricsProtocol(Protocol):
+    """Evaluates audio synthesis quality across perceptual and acoustic dimensions.
+
+    Computes MOS estimation, speaker similarity, pitch contour matching,
+    prosody alignment, and SNR comparison.
+    """
+
+    async def evaluate(
+        self,
+        real_audio_batch: list[np.ndarray],
+        synthetic_audio_batch: list[np.ndarray],
+        sample_rate: int = 16_000,
+    ) -> dict[str, Any]:
+        """Run full audio fidelity evaluation.
+
+        Args:
+            real_audio_batch: List of real waveforms (float32, normalised [-1, 1]).
+            synthetic_audio_batch: List of synthetic waveforms.
+            sample_rate: Sample rate in Hz for all waveforms.
+
+        Returns:
+            Report dict with mos_score, speaker_similarity, pitch_score,
+            prosody_score, snr_score, and overall_score.
+        """
+        ...
+
+
+class VideoMetricsProtocol(Protocol):
+    """Evaluates video synthesis quality across temporal and spatial dimensions.
+
+    Computes per-frame LPIPS, optical flow consistency, temporal coherence,
+    and scene transition detection accuracy.
+    """
+
+    async def evaluate(
+        self,
+        real_video: np.ndarray,
+        synthetic_video: np.ndarray,
+    ) -> dict[str, Any]:
+        """Run full video fidelity evaluation.
+
+        Args:
+            real_video: Real video frames, shape (T, H, W, C), uint8, RGB.
+            synthetic_video: Synthetic video frames, same format.
+
+        Returns:
+            Report dict with lpips_score, optical_flow_score, temporal_score,
+            scene_transition_score, and overall_score.
+        """
+        ...
+
+
+class HealthcareMetricsProtocol(Protocol):
+    """Validates healthcare data fidelity across clinical and technical dimensions.
+
+    Evaluates FHIR bundle structure, clinical realism, ICD-10/CPT code
+    alignment, lab value plausibility, and medication safety scoring.
+    """
+
+    async def evaluate(
+        self,
+        real_data: pd.DataFrame,
+        synthetic_data: pd.DataFrame,
+        fhir_bundles: list[dict[str, Any]] | None,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Run full healthcare fidelity evaluation.
+
+        Args:
+            real_data: Real healthcare records as a DataFrame.
+            synthetic_data: Synthetic healthcare records as a DataFrame.
+            fhir_bundles: Optional list of FHIR bundles from synthetic data.
+            metadata: Optional column metadata mapping column names to clinical types.
+
+        Returns:
+            Report dict with fhir_validation, clinical_realism, code_alignment,
+            lab_plausibility, medication_safety, and overall_score.
+        """
+        ...
+
+
+class StatisticalTestRunnerProtocol(Protocol):
+    """Runs a comprehensive statistical test suite comparing two datasets.
+
+    Executes KS test, chi-squared test, Wasserstein distance, Anderson-Darling,
+    and Jensen-Shannon divergence per column, with Bonferroni correction.
+    """
+
+    async def run_all_tests(
+        self,
+        real_data: pd.DataFrame,
+        synthetic_data: pd.DataFrame,
+        alpha: float = 0.05,
+        thresholds: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Run the full statistical test suite on two datasets.
+
+        Args:
+            real_data: The original source dataset.
+            synthetic_data: The generated synthetic dataset.
+            alpha: Significance level before Bonferroni correction.
+            thresholds: Optional per-metric distance thresholds for pass/fail.
+
+        Returns:
+            Report dict with per-column results, Bonferroni-corrected p-values,
+            overall pass/fail, and significantly different column lists.
+        """
+        ...
+
+    async def run_ks_test(
+        self,
+        real_data: pd.DataFrame,
+        synthetic_data: pd.DataFrame,
+    ) -> dict[str, Any]:
+        """Run KS test per numeric column only."""
+        ...
+
+    async def run_chi_squared_test(
+        self,
+        real_data: pd.DataFrame,
+        synthetic_data: pd.DataFrame,
+    ) -> dict[str, Any]:
+        """Run chi-squared test per categorical column only."""
+        ...
+
+
+class FidelityReportGeneratorProtocol(Protocol):
+    """Generates comprehensive fidelity reports in JSON and PDF formats."""
+
+    async def generate_json_report(
+        self,
+        job_id: uuid.UUID,
+        tenant_id: str,
+        fidelity_report: dict[str, Any],
+        privacy_report: dict[str, Any] | None,
+        memorization_report: dict[str, Any] | None,
+        overall_score: float,
+        passed: bool,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Generate a structured JSON report from all evaluation results.
+
+        Args:
+            job_id: Validation job UUID.
+            tenant_id: Tenant identifier.
+            fidelity_report: Fidelity evaluation results.
+            privacy_report: Privacy risk results (optional).
+            memorization_report: Memorization attack results (optional).
+            overall_score: Aggregate score in [0, 1].
+            passed: Whether all thresholds were met.
+            metadata: Optional column metadata.
+
+        Returns:
+            Structured JSON-serialisable report dict with executive summary,
+            column breakdown, and visualisation data.
+        """
+        ...
+
+    async def generate_pdf_report(
+        self,
+        job_id: uuid.UUID,
+        tenant_id: str,
+        fidelity_report: dict[str, Any],
+        privacy_report: dict[str, Any] | None,
+        memorization_report: dict[str, Any] | None,
+        overall_score: float,
+        passed: bool,
+    ) -> bytes:
+        """Generate a PDF compliance report using reportlab.
+
+        Args:
+            job_id: Validation job UUID.
+            tenant_id: Tenant identifier.
+            fidelity_report: Fidelity evaluation results.
+            privacy_report: Privacy risk results (optional).
+            memorization_report: Memorization attack results (optional).
+            overall_score: Aggregate score in [0, 1].
+            passed: Whether all thresholds were met.
+
+        Returns:
+            PDF bytes ready for storage or download.
+        """
         ...
